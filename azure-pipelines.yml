@@ -1,0 +1,73 @@
+trigger:
+- master
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  GOBIN:  '$(GOPATH)/bin' # Go binaries path
+  GOROOT: '/usr/local/go1.11' # Go installation path
+  GOPATH: '$(system.defaultWorkingDirectory)/gopath' # Go workspace path
+  modulePath: '$(GOPATH)/src/github.com/$(build.repository.name)' # Path to the module's code
+
+steps:
+- task: SSH@0
+  inputs:
+    sshEndpoint: 'Server'
+    runOptions: 'inline'
+    inline: 'pm2 list'
+  displayName: 'Test SSH connection'
+
+- script: |
+    mkdir -p '$(GOBIN)'
+    mkdir -p '$(GOPATH)/pkg'
+    mkdir -p '$(modulePath)'
+    shopt -s extglob
+    shopt -s dotglob
+    mv !(gopath) '$(modulePath)'
+    echo '##vso[task.prependpath]$(GOBIN)'
+    echo '##vso[task.prependpath]$(GOROOT)/bin'
+  displayName: 'Set up the Go workspace'
+
+- task: CopyFiles@2
+  inputs:
+    SourceFolder: '$(modulePath)'
+    Contents: '**'
+    TargetFolder: '$(GOPATH)/src/server'
+  displayName: 'Copy file to GOPATH'
+
+- script: |
+   chmod 777 goget.sh
+   ./goget.sh
+   $(GOBIN)/govendor sync
+  workingDirectory: '$(GOPATH)/src/server'
+  displayName: 'Install modules'
+
+- task: Go@0
+  displayName: 'Go build'
+  inputs:
+    command: build
+    arguments: main.go
+    workingDirectory: '$(GOPATH)/src/server'
+
+- task: SSH@0
+  inputs:
+    sshEndpoint: 'Server'
+    runOptions: 'inline'
+    inline: 'pm2 stop all'
+  displayName: 'Stop service'
+
+- task: CopyFilesOverSSH@0
+  inputs:
+    sshEndpoint: 'Server'
+    sourceFolder: '$(GOPATH)/src/server'
+    contents: 'main'
+    targetFolder: '/root/go/src/server'
+  displayName: 'Transfer release to server'
+
+- task: SSH@0
+  inputs:
+    sshEndpoint: 'Server'
+    runOptions: 'inline'
+    inline: 'pm2 restart main'
+  displayName: 'Restart service'
